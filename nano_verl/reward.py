@@ -7,7 +7,7 @@ def extract_boxed_answer(response: str) -> str:
     i = idx + len("\\boxed{")
     depth = 1
     start = i
-    while len(response) and depth > 0:
+    while i < len(response) and depth > 0:
         if response[i] == "{":
             depth += 1
         elif response[i] == "}":
@@ -29,4 +29,5 @@ def compute_score(response: str, ground_truth: str) -> float:
 
     cleaned_response = normalize_answer(extracted)
     cleaned_gt = normalize_answer(ground_truth)
+    print(f"cleaned_response: {cleaned_response} | cleaned_gt: {cleaned_gt}")
     return 1.0 if cleaned_response == cleaned_gt else 0.0

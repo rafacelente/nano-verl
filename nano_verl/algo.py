@@ -77,24 +77,29 @@ def grpo_step(
     clip_ratio: float = 0.2,
     kl_coef: float = 0.001,
 ):
+    token_level_rewards = batch.tensors["rewards"].unsqueeze(-1) * batch.tensors["response_mask"]
+    
     advantages = compute_grpo_advantage(
-        token_level_rewards=batch.tensors["rewards"],
+        token_level_rewards=token_level_rewards,
         response_mask=batch.tensors["response_mask"],
         index=batch.metadata["uids"],
     )
 
-    new_log_probs = model.forward_log_probs(
-        input_ids=batch.tensors["full_ids"],
-        attention_mask=batch.tensors["full_attention_mask"]
+    new_log_probs_full = model.forward_log_probs(
+        full_ids=batch.tensors["full_ids"],
+        full_attention_mask=batch.tensors["full_attention_mask"]
     )
 
     with torch.no_grad():
-        ref_log_probs = ref_model.forward_log_probs(
-            input_ids=batch.tensors["full_ids"],
-            attention_mask=batch.tensors["full_attention_mask"]
+        ref_log_probs_full = ref_model.forward_log_probs(
+            full_ids=batch.tensors["full_ids"],
+            full_attention_mask=batch.tensors["full_attention_mask"]
         )
+    start = batch.tensors["attention_mask"].shape[1] - 1
+    new_log_probs = new_log_probs_full[:, start:] # (bs, resp_length)
+    ref_log_probs = ref_log_probs_full[:, start:] # (bs, resp_length)
     
-    old_log_probs = batch.tensors["old_log_probs"]
+    old_log_probs = batch.tensors["old_log_probs"] # (bs, resp_length)
     mask = batch.tensors["response_mask"]
 
     policy_loss = compute_policy_loss(

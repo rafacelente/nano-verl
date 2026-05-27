@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 
 import torch
 import torch.nn.functional as F
@@ -12,7 +12,7 @@ class Engine:
     def __init__(
         self,
         model_name: str,
-        optimizer_config: OptimizerConfig,
+        optimizer_config: Optional[OptimizerConfig] = None,
         max_grad_norm: float = 1.0,
         use_fsdp: bool = False,
     ):
@@ -42,18 +42,30 @@ class Engine:
         else:
             self.model = unwrapped_model
 
-        self.optimizer = self.optimizer_config.get_optimizer(self.model)
-        lr_scheduler_func = self.optimizer_config.get_lr_scheduler()
-        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_scheduler_func)
+        if self.optimizer_config is not None:
+            self.optimizer = self.optimizer_config.get_optimizer(self.model)
+            lr_scheduler_func = self.optimizer_config.get_lr_scheduler()
+            self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_scheduler_func)
+        else:
+            self.optimizer = None
+            self.lr_scheduler = None
+
+    def to(self, device: str):
+        return self.model.to(device)
+
+    def set_to_reference(self):
+        self.model = self.model.eval()
+        for p in self.model.parameters():
+            p.requires_grad = False
 
     def _model_forward_logits(self, full_ids: torch.Tensor, full_attention_mask: torch.Tensor):
         if not self.use_fsdp:
-            with torch.autocast(device=full_ids.device, enabled=True, dtype=torch.bfloat16):
+            with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
                 return self.model(input_ids=full_ids, attention_mask=full_attention_mask).logits
         else:
             return self.model(input_ids=full_ids, attention_mask=full_attention_mask).logits
 
-    def forward_log_probs(self, full_ids: torch.Tensor, full_attention_mask: torch.Tensor, response_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward_log_probs(self, full_ids: torch.Tensor, full_attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         logits = self._model_forward_logits(full_ids, full_attention_mask)
 
         logits = logits[:, :-1, :]
@@ -65,6 +77,8 @@ class Engine:
         return per_token_log_probs # (bs, seqlen-1)
 
     def train_step(self, loss: torch.Tensor):
+        if self.optimizer is None or self.lr_scheduler is None:
+            raise ValueError(f"Optimizer and LR Scheduler must be set up for train_step to be called.")
         self.optimizer.zero_grad()
         loss.backward()
         self.model.clip_grad_norm_(self.max_grad_norm)

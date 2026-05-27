@@ -13,7 +13,7 @@ class RolloutEngine:
             model=model_name,
             dtype="bfloat16",
             tensor_parallel_size=1,
-            gpu_memory_utilization=0.5,
+            gpu_memory_utilization=0.3,
             enforce_eager=True,
         )
 

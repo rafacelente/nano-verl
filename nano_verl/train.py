@@ -103,6 +103,9 @@ def mock_train(
     tokenizer: AutoTokenizer,
     config: dict[str, Any],
 ):
+    engine.to("cuda")
+    ref_engine.to("cuda")
+
     for step, batch_dict in enumerate(dataloader):
         prompt_ids = batch_dict["input_ids"]
         prompt_masks = batch_dict["attention_mask"]
@@ -165,16 +168,16 @@ def mock_train(
                 "old_log_probs": old_log_probs_padded,
                 "full_ids": full_ids,
                 "full_attention_mask": full_attention_mask,
-                "rewards": rewards
+                "rewards": rewards,
             },
             metadata={}
         )
-        token_level_rewards = rewards.unsqueeze(-1) * response_masks_padded
         batch = batch.union(rollout_batch)
 
-        print(batch)
-        print(rewards)
-        print(token_level_rewards)
+        batch.tensors.pop("input_ids")
+        batch.tensors.pop("responses")
+
+        batch.to("cuda")
 
         loss = grpo_step(
             engine,
@@ -183,8 +186,8 @@ def mock_train(
             clip_ratio=config.get("clip_ratio", 0.2),
             kl_coef=config.get("kl_coef", 0.001)
         )
-
         print(loss)
+        loss.backward()
 
         
 

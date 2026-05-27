@@ -96,7 +96,7 @@ class Batch:
         metadata = {k: v for k, v in self.metadata.items() if k in metadata_keys} if metadata_keys else self.medata
         return Batch(tensors=tensors, metadata=metadata)
 
-    def to(self, device: Union[torch.Device, str]):
+    def to(self, device: Union[torch.device, str]):
         self.tensors = self.tensors.to(device)
         return self
 

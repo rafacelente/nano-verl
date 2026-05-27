@@ -13,51 +13,61 @@ class Engine:
         self,
         model_name: str,
         optimizer_config: OptimizerConfig,
+        max_grad_norm: float = 1.0,
+        use_fsdp: bool = False,
     ):
         self.model_name = model_name
         self.optimizer_config = optimizer_config
+        self.max_grad_norm = max_grad_norm
+        self.use_fsdp = use_fsdp
 
-        unwrapped_model = AutoModelForCausalLM(
+        unwrapped_model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
-            attn_implementation="sdpa" # hope that this torch+transformers setup has FA4 already
+            attn_implementation="sdpa" # hope that this torch+transformers version has FA4 already
         )
 
-        mixed_precision = MixedPrecision(
-            param_dtype=torch.bfloat16,
-            reduce_dtype=torch.float32,
-            buffer_dtype=torch.float32,
-        )
-
-        self.model = FSDP(
-            unwrapped_model,
-            mixed_precision=mixed_precision,
-            device_id=torch.cuda.current_device(),
-            use_orig_params=True,
-        )
+        if self.use_fsdp:
+            mixed_precision = MixedPrecision(
+                param_dtype=torch.bfloat16,
+                reduce_dtype=torch.float32,
+                buffer_dtype=torch.float32,
+            )
+            self.model = FSDP(
+                unwrapped_model,
+                mixed_precision=mixed_precision,
+                device_id=torch.cuda.current_device(),
+                use_orig_params=True,
+            )
+        else:
+            self.model = unwrapped_model
 
         self.optimizer = self.optimizer_config.get_optimizer(self.model)
         lr_scheduler_func = self.optimizer_config.get_lr_scheduler()
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_scheduler_func)
 
+    def _model_forward_logits(self, full_ids: torch.Tensor, full_attention_mask: torch.Tensor):
+        if not self.use_fsdp:
+            with torch.autocast(device=full_ids.device, enabled=True, dtype=torch.bfloat16):
+                return self.model(input_ids=full_ids, attention_mask=full_attention_mask).logits
+        else:
+            return self.model(input_ids=full_ids, attention_mask=full_attention_mask).logits
+
     def forward_log_probs(self, full_ids: torch.Tensor, full_attention_mask: torch.Tensor, response_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        logits = self.model(
-            input_ids=full_ids,
-            attention_mask=full_attention_mask,
-        ).logits
+        logits = self._model_forward_logits(full_ids, full_attention_mask)
 
         logits = logits[:, :-1, :]
         labels = full_ids[:, 1:]
-        mask = response_mask[:, 1:]
 
-        log_probs = F.log_softmax(logits, labels, dim=-1)
+        log_probs = F.log_softmax(logits, dim=-1)
         per_token_log_probs = log_probs.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
 
-        return per_token_log_probs, mask
+        return per_token_log_probs # (bs, seqlen-1)
 
     def train_step(self, loss: torch.Tensor):
         self.optimizer.zero_grad()
         loss.backward()
+        self.model.clip_grad_norm_(self.max_grad_norm)
         self.optimizer.step()
         self.lr_scheduler.step()
 
